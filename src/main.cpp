@@ -1,120 +1,90 @@
 /*
- * LS7366R Encoder Counter Main Program (Single Chip Version)
- * 
- * Hardware Connections:
- * - LS7366R connected to ESP32 via SPI
- * - Encoder A/B signals connected to LS7366R input pins
- * 
- * SPI Connections (ESP32):
- * - MOSI: GPIO 23 (default)
- * - MISO: GPIO 19 (default)
- * - SCK:  GPIO 18 (default)
- * - CS:   GPIO 5  (customizable)
+ * LS7366R Test on ESP32 (using LS7366R_Single library)
+ *
+ * - Configures LS7366R for 4x quadrature, 32-bit counter, free-run
+ * - Reads count periodically and prints via Serial
+ *
+ * Connections (default VSPI on ESP32):
+ *   SCK  -> GPIO 18
+ *   MISO -> GPIO 19
+ *   MOSI -> GPIO 23
+ *   CS   -> GPIO 5 (configurable below)
+ *   VCC  -> 3.3V
+ *   GND  -> GND
+ *
+ * Encoder:
+ *   A/B/Z to LS7366R A/B/IDX pins as per your board
  */
 
 #include <Arduino.h>
+#include <SPI.h>
 #include "LS7366R_Single.h"
 
-// ========== Pin Definitions ==========
-#define LS7366R_CS_PIN   5   // CS pin
+// --- Pin configuration ---
+#define LS7366_CS_PIN  5
 
-// ========== Configuration Parameters ==========
-// MDR0 Configuration: 4x quadrature mode, free-running, no index
-#define MDR0_CONFIG  B00000011
-
-// MDR1 Configuration: 32-bit counter, enabled
-#define MDR1_CONFIG  B00000000
-
-// ========== Object Creation ==========
-LS7366R_Single encoder(LS7366R_CS_PIN, MDR0_CONFIG, MDR1_CONFIG);
-
-// ========== Variable Definitions ==========
-unsigned long lastReadTime = 0;
-const unsigned long READ_INTERVAL = 100;  // Read interval (milliseconds)
-
-// Variables for speed calculation
-long lastCount = 0;
-unsigned long lastSpeedCalcTime = 0;
-const unsigned long SPEED_CALC_INTERVAL = 200;  // Speed calculation interval (milliseconds)
-
-// Encoder parameters (adjust according to your encoder)
-const float PULSES_PER_REVOLUTION = 4000.0;  // Pulses per revolution (actual pulses in 4x mode)
+// --- Library object ---
+LS7366R_Single encoder(LS7366_CS_PIN);
 
 void setup() {
-    Serial.begin(115200);
-    delay(1000);
-    
-    Serial.println("========================================");
-    Serial.println("LS7366R Encoder Counter (Single Chip)");
-    Serial.println("========================================");
-    Serial.println();
-    
-    Serial.println("LS7366R initialized!");
-    Serial.print("CS Pin: ");
-    Serial.println(LS7366R_CS_PIN);
-    Serial.print("Pulses per revolution: ");
-    Serial.println(PULSES_PER_REVOLUTION);
-    Serial.println();
-    
-    // Reset counter
-    encoder.reset();
-    Serial.println("Counter reset to zero");
-    Serial.println();
-    
-    Serial.println("Starting to read encoder values...");
-    Serial.println("Format: Count | Turns | Speed (rps)");
-    Serial.println("----------------------------------------");
-    
-    lastReadTime = millis();
-    lastSpeedCalcTime = millis();
+  Serial.begin(115200);
+  delay(200);
+  Serial.println("\nLS7366R ESP32 Test (using library)");
+
+  if (encoder.begin()) {
+    Serial.println("LS7366R initialized.");
+  } else {
+    Serial.println("LS7366R init failed!");
+  }
+
+  // Clear status
+  encoder.clearStatus();
+
+  // Initial status
+  uint8_t str = encoder.readStatus();
+  Serial.print("Initial STR=0x");
+  Serial.println(str, HEX);
+
+  // Initial count
+  encoder.sync();
+  int32_t cnt = encoder.getCount();
+  Serial.print("Initial Count: ");
+  Serial.println(cnt);
 }
 
+unsigned long lastPrint = 0;
+
 void loop() {
-    unsigned long currentTime = millis();
-    
-    // Periodically sync and read encoder values
-    if (currentTime - lastReadTime >= READ_INTERVAL) {
-        // Sync and read counter value from LS7366R chip
-        encoder.sync();
-        
-        // Get counter value
-        long count = encoder.getCount();
-        
-        // Calculate turns
-        float turns = (float)count / PULSES_PER_REVOLUTION;
-        
-        // Calculate speed (revolutions per second)
-        float speed = 0.0;
-        
-        if (currentTime - lastSpeedCalcTime >= SPEED_CALC_INTERVAL) {
-            long countDiff = count - lastCount;
-            float timeDiff = (currentTime - lastSpeedCalcTime) / 1000.0;  // Convert to seconds
-            
-            speed = ((float)countDiff / PULSES_PER_REVOLUTION) / timeDiff;
-            
-            lastCount = count;
-            lastSpeedCalcTime = currentTime;
-        }
-        
-        // Display results
-        Serial.print("Count: ");
-        Serial.print(count);
-        Serial.print(" | Turns: ");
-        Serial.print(turns, 3);
-        Serial.print(" | Speed: ");
-        Serial.print(speed, 2);
-        Serial.println(" rps");
-        
-        lastReadTime = currentTime;
+  // Periodically print count
+  if (millis() - lastPrint >= 250) {
+    lastPrint = millis();
+
+    encoder.sync();
+    int32_t count = encoder.getCount();
+    Serial.print("Count: ");
+    Serial.print(count);
+
+    // Optional: read status
+    uint8_t str = encoder.readStatus();
+    Serial.print("  STR=0x");
+    Serial.print(str, HEX);
+
+    Serial.println();
+  }
+
+  // Serial commands
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 'z' || c == 'Z') {
+      encoder.reset();
+      encoder.clearStatus();
+      Serial.println("Counter and status cleared.");
+    } else if (c == 'r' || c == 'R') {
+      encoder.sync();
+      Serial.print("Count=");
+      Serial.print(encoder.getCount());
+      Serial.print(" STR=0x");
+      Serial.println(encoder.readStatus(), HEX);
     }
-    
-    // Check if reset is needed (reset via serial command 'r' or 'R')
-    if (Serial.available()) {
-        char cmd = Serial.read();
-        if (cmd == 'r' || cmd == 'R') {
-            encoder.reset();
-            lastCount = 0;
-            Serial.println("\nCounter reset!");
-        }
-    }
+  }
 }
